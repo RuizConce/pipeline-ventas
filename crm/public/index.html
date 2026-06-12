@@ -170,6 +170,18 @@
           <label>Website</label>
           <input type="text" id="fWebsite">
         </div>
+        <div class="form-group">
+          <label>Cliente</label>
+          <select id="fCliente">
+            <option value="Conecta CSur">Conecta CSur</option>
+            <option value="Estética Andaluz">Estética Andaluz</option>
+            <option value="Dist. Patagonia">Dist. Patagonia</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Producto</label>
+          <input type="text" id="fProducto" placeholder="WEB, CRM, SEO...">
+        </div>
       </div>
       <div class="form-group">
         <label>Notas</label>
@@ -311,6 +323,8 @@ async function openLead(id) {
   document.getElementById('fCiudad').value = l.ciudad || '';
   document.getElementById('fEstado').value = l.estado || 'nuevo';
   document.getElementById('fWebsite').value = l.website || '';
+  document.getElementById('fCliente').value = l.cliente || 'Conecta CSur';
+  document.getElementById('fProducto').value = l.producto || '';
   document.getElementById('fNotas').value = l.notas || '';
 
   const histList = document.getElementById('historyList');
@@ -344,6 +358,8 @@ async function saveLead(e) {
     ciudad: document.getElementById('fCiudad').value,
     estado: document.getElementById('fEstado').value,
     website: document.getElementById('fWebsite').value,
+    cliente: document.getElementById('fCliente').value,
+    producto: document.getElementById('fProducto').value,
     notas: document.getElementById('fNotas').value,
   };
   await fetch(`/api/leads/${currentLeadId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
