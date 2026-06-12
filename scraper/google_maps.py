@@ -43,8 +43,8 @@ def save_lead(lead: dict) -> bool:
 
         cursor.execute(
             """INSERT INTO leads (nombre, empresa, rubro, telefono, email, ciudad,
-               direccion, website, rating, total_reviews, fuente)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'google_maps')""",
+               direccion, website, rating, total_reviews, fuente, cliente)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'google_maps', %s)""",
             (
                 lead.get("nombre", ""),
                 lead.get("empresa", ""),
@@ -56,6 +56,7 @@ def save_lead(lead: dict) -> bool:
                 lead.get("website", ""),
                 lead.get("rating"),
                 lead.get("total_reviews", 0),
+                lead.get("cliente", "Conecta CSur"),
             )
         )
         conn.commit()
@@ -69,7 +70,7 @@ def save_lead(lead: dict) -> bool:
         conn.close()
 
 
-async def scrape_google_maps(query: str, ciudad: str, max_results: int = 50):
+async def scrape_google_maps(query: str, ciudad: str, max_results: int = 50, cliente: str = "Conecta CSur"):
     """Extrae negocios de Google Maps para la búsqueda dada."""
     leads = []
 
@@ -103,7 +104,7 @@ async def scrape_google_maps(query: str, ciudad: str, max_results: int = 50):
                 await item.click()
                 await page.wait_for_timeout(2000)
 
-                lead = {"ciudad": ciudad, "rubro": query}
+                lead = {"ciudad": ciudad, "rubro": query, "cliente": cliente}
 
                 # Nombre del negocio
                 name_el = page.locator('h1.DUwDvf, h1[class*="fontHeadlineLarge"]').first
@@ -158,6 +159,20 @@ async def scrape_google_maps(query: str, ciudad: str, max_results: int = 50):
 
 
 async def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="Scraper Google Maps para pipeline de ventas")
+    parser.add_argument("--query", type=str, help="Rubro a buscar (ej: 'restaurantes')")
+    parser.add_argument("--ciudad", type=str, default="Temuco", help="Ciudad a buscar")
+    parser.add_argument("--cliente", type=str, default="Conecta CSur", help="Cliente al que pertenecen los leads")
+    parser.add_argument("--max", type=int, default=30, help="Máximo de resultados por búsqueda")
+    args = parser.parse_args()
+
+    if args.query:
+        leads = await scrape_google_maps(args.query, args.ciudad, args.max, args.cliente)
+        print(f"\n→ {len(leads)} nuevos leads guardados para '{args.query}' en {args.ciudad} (cliente: {args.cliente})")
+        return
+
+    # Sin argumentos: ejecutar búsquedas por defecto
     busquedas = [
         ("restaurantes", "Temuco"),
         ("ferreterías", "Temuco"),
@@ -168,7 +183,7 @@ async def main():
 
     total = 0
     for query, ciudad in busquedas:
-        leads = await scrape_google_maps(query, ciudad, max_results=30)
+        leads = await scrape_google_maps(query, ciudad, max_results=args.max, cliente=args.cliente)
         total += len(leads)
         print(f"→ {len(leads)} nuevos leads guardados para '{query}' en {ciudad}\n")
 

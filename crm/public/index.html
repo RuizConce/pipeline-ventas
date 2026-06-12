@@ -86,6 +86,13 @@
     <option value="Temuco">Temuco</option>
     <option value="Santiago">Santiago</option>
     <option value="Concepción">Concepción</option>
+    <option value="Iquique">Iquique</option>
+  </select>
+  <select id="filterCliente" onchange="loadLeads()">
+    <option value="">Todos los clientes</option>
+    <option value="Conecta CSur">Conecta CSur</option>
+    <option value="Estética Andaluz">Estética Andaluz</option>
+    <option value="Dist. Patagonia">Dist. Patagonia</option>
   </select>
 </div>
 
@@ -240,10 +247,12 @@ async function loadLeads() {
   const search = document.getElementById('searchInput').value;
   const estado = document.getElementById('filterEstado').value;
   const ciudad = document.getElementById('filterCiudad').value;
+  const cliente = document.getElementById('filterCliente').value;
   const params = new URLSearchParams({ page: currentPage, limit });
   if (search) params.set('search', search);
   if (estado) params.set('estado', estado);
   if (ciudad) params.set('ciudad', ciudad);
+  if (cliente) params.set('cliente', cliente);
 
   const r = await fetch('/api/leads?' + params);
   const d = await r.json();
