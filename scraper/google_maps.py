@@ -8,6 +8,9 @@ import asyncio
 import json
 import os
 import re
+import subprocess
+import sys
+import glob
 import mysql.connector
 from datetime import datetime
 from playwright.async_api import async_playwright
@@ -15,6 +18,46 @@ from scraper.browser_utils import get_launch_kwargs
 from dotenv import load_dotenv
 
 load_dotenv()
+
+
+def print_diagnostics():
+    """Imprime info de entorno útil para depurar en Railway/Docker."""
+    print("=" * 55)
+    print(f"[DIAG] Python:        {sys.version.split()[0]}")
+    print(f"[DIAG] RAILWAY_ENV:   {os.getenv('RAILWAY_ENVIRONMENT', '(no definido)')}")
+    print(f"[DIAG] PW_BROWSERS:   {os.getenv('PLAYWRIGHT_BROWSERS_PATH', '(no definido)')}")
+
+    # Chromium que usará get_launch_kwargs
+    kw = get_launch_kwargs()
+    exe = kw.get("executable_path", "(playwright default path)")
+    print(f"[DIAG] Chromium exe:  {exe}")
+    if "executable_path" in kw:
+        exists = os.path.isfile(kw["executable_path"])
+        print(f"[DIAG] Exe existe:    {exists}")
+
+    # Buscar cualquier chrome/chromium instalado en el sistema
+    candidates = glob.glob("/ms-playwright/**/chrome", recursive=True) + \
+                 glob.glob("/ms-playwright/**/chrome-linux/chrome", recursive=True) + \
+                 glob.glob("/root/.cache/ms-playwright/**/chrome", recursive=True)
+    if candidates:
+        for c in candidates[:3]:
+            print(f"[DIAG] Encontrado:    {c}")
+    else:
+        print("[DIAG] Encontrado:    (ninguno en /ms-playwright ni ~/.cache)")
+
+    # playwright install --dry-run para ver qué instalaría
+    try:
+        result = subprocess.run(
+            ["playwright", "install", "--dry-run", "chromium"],
+            capture_output=True, text=True, timeout=15
+        )
+        output = (result.stdout + result.stderr).strip()
+        for line in output.splitlines()[:6]:
+            print(f"[DIAG] pw dry-run:    {line}")
+    except Exception as e:
+        print(f"[DIAG] pw dry-run:    error — {e}")
+
+    print("=" * 55)
 
 DB_CONFIG = {
     "host": os.getenv("DB_HOST", "localhost"),
@@ -162,6 +205,7 @@ async def scrape_google_maps(query: str, ciudad: str, max_results: int = 50, cli
 
 async def main():
     import argparse
+    print_diagnostics()
     parser = argparse.ArgumentParser(description="Scraper Google Maps para pipeline de ventas")
     parser.add_argument("--rubro", type=str, help="Rubro a buscar (ej: 'restaurantes')")
     parser.add_argument("--ciudad", type=str, default="Temuco", help="Ciudad a buscar")
