@@ -9,14 +9,22 @@ Uso:
 """
 
 import asyncio
+import json
 import os
 import re
-import sys
 import shutil
 import mysql.connector
+from pathlib import Path
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# Credenciales Instagram desde .env
+IG_USERNAME = os.getenv("IG_USERNAME", "")
+IG_PASSWORD = os.getenv("IG_PASSWORD", "")
+
+# Archivo donde se persisten las cookies de sesión
+COOKIES_FILE = Path(__file__).parent / ".ig_cookies.json"
 
 DB_CONFIG = {
     "host": os.getenv("DB_HOST", "localhost"),
@@ -142,6 +150,120 @@ def get_chromium_exe() -> str | None:
         shutil.which("google-chrome") or "",
     ]
     return next((p for p in candidates if p and os.path.isfile(p)), None)
+
+
+async def save_cookies(context) -> None:
+    """Persiste las cookies del contexto en disco."""
+    cookies = await context.cookies()
+    COOKIES_FILE.write_text(json.dumps(cookies, indent=2, ensure_ascii=False))
+    print(f"  Cookies guardadas en {COOKIES_FILE}")
+
+
+async def load_cookies(context) -> bool:
+    """Carga cookies desde disco al contexto. Retorna True si existían."""
+    if not COOKIES_FILE.exists():
+        return False
+    try:
+        cookies = json.loads(COOKIES_FILE.read_text())
+        await context.add_cookies(cookies)
+        return True
+    except Exception as e:
+        print(f"  Advertencia: no se pudieron cargar cookies ({e})")
+        return False
+
+
+async def is_logged_in(page) -> bool:
+    """Verifica si la sesión actual de Instagram está activa."""
+    try:
+        await page.goto("https://www.instagram.com/", wait_until="domcontentloaded", timeout=15000)
+        await page.wait_for_timeout(2000)
+        # Si aparece el formulario de login, la sesión expiró
+        login_form = page.locator('input[name="username"]')
+        return not await login_form.is_visible(timeout=3000)
+    except Exception:
+        return False
+
+
+async def do_login(page) -> bool:
+    """Realiza login en Instagram con las credenciales del .env."""
+    if not IG_USERNAME or not IG_PASSWORD:
+        print("  AVISO: IG_USERNAME o IG_PASSWORD no configurados en .env — continuando sin login.")
+        return False
+
+    print(f"  Iniciando login como @{IG_USERNAME}...")
+    try:
+        await page.goto("https://www.instagram.com/accounts/login/",
+                        wait_until="domcontentloaded", timeout=20000)
+        await page.wait_for_timeout(2500)
+
+        # Aceptar cookies si aparece el banner
+        for sel in ['button:has-text("Allow all cookies")',
+                    'button:has-text("Aceptar todas")',
+                    'button:has-text("Aceptar")']:
+            try:
+                btn = page.locator(sel).first
+                if await btn.is_visible(timeout=2000):
+                    await btn.click()
+                    await page.wait_for_timeout(1000)
+                    break
+            except Exception:
+                pass
+
+        # Rellenar credenciales
+        await page.locator('input[name="username"]').fill(IG_USERNAME)
+        await page.wait_for_timeout(500)
+        await page.locator('input[name="password"]').fill(IG_PASSWORD)
+        await page.wait_for_timeout(500)
+        await page.locator('button[type="submit"]').click()
+
+        # Esperar redirección post-login (máx 15 s)
+        try:
+            await page.wait_for_url(
+                lambda url: "accounts/login" not in url and "challenge" not in url,
+                timeout=15000,
+            )
+        except Exception:
+            pass
+
+        await page.wait_for_timeout(3000)
+
+        # Verificar éxito
+        if "accounts/login" in page.url or "challenge" in page.url:
+            print(f"  ERROR: Login fallido — URL actual: {page.url}")
+            return False
+
+        print(f"  Login exitoso. URL: {page.url}")
+        return True
+
+    except Exception as e:
+        print(f"  ERROR en do_login: {e}")
+        return False
+
+
+async def ensure_session(context, page) -> bool:
+    """
+    Restaura sesión desde cookies o hace login si es necesario.
+    Guarda cookies nuevas tras un login fresco.
+    Retorna True si la sesión quedó activa.
+    """
+    # 1. Intentar con cookies guardadas
+    loaded = await load_cookies(context)
+    if loaded:
+        print("  Cookies encontradas — verificando sesión...")
+        if await is_logged_in(page):
+            print("  Sesión restaurada desde cookies.")
+            return True
+        print("  Cookies expiradas, haciendo login...")
+        COOKIES_FILE.unlink(missing_ok=True)
+
+    # 2. Login fresco
+    logged = await do_login(page)
+    if logged:
+        await save_cookies(context)
+        return True
+
+    # 3. Sin credenciales o login fallido — continuar sin sesión (acceso limitado)
+    return False
 
 
 async def scrape_hashtag(page, hashtag: str, ciudad: str, cliente: str, producto: str,
@@ -340,6 +462,9 @@ async def scrape_instagram(hashtags: list[str], ciudad: str, cliente: str,
             Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
         """)
         page = await context.new_page()
+
+        # Asegurar sesión autenticada (cookies o login fresco)
+        await ensure_session(context, page)
 
         for hashtag in hashtags:
             leads = await scrape_hashtag(page, hashtag, ciudad, cliente, producto, max_por_hashtag)
