@@ -1,0 +1,179 @@
+#!/usr/bin/env python3
+"""
+Google Maps scraper para extraer leads de negocios locales.
+Usa Playwright para automatizar la búsqueda en Google Maps.
+"""
+
+import asyncio
+import json
+import os
+import re
+import mysql.connector
+from datetime import datetime
+from playwright.async_api import async_playwright
+from dotenv import load_dotenv
+
+load_dotenv()
+
+DB_CONFIG = {
+    "host": os.getenv("DB_HOST", "localhost"),
+    "port": int(os.getenv("DB_PORT", 3306)),
+    "database": os.getenv("DB_NAME", "pipeline_ventas"),
+    "user": os.getenv("DB_USER", "root"),
+    "password": os.getenv("DB_PASSWORD", ""),
+}
+
+
+def get_db_connection():
+    return mysql.connector.connect(**DB_CONFIG)
+
+
+def save_lead(lead: dict) -> bool:
+    """Guarda un lead en la base de datos, evitando duplicados por email o teléfono."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        # Verificar duplicado
+        cursor.execute(
+            "SELECT id FROM leads WHERE email = %s OR (telefono = %s AND telefono != '')",
+            (lead.get("email", ""), lead.get("telefono", ""))
+        )
+        if cursor.fetchone():
+            return False
+
+        cursor.execute(
+            """INSERT INTO leads (nombre, empresa, rubro, telefono, email, ciudad,
+               direccion, website, rating, total_reviews, fuente)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'google_maps')""",
+            (
+                lead.get("nombre", ""),
+                lead.get("empresa", ""),
+                lead.get("rubro", ""),
+                lead.get("telefono", ""),
+                lead.get("email", ""),
+                lead.get("ciudad", ""),
+                lead.get("direccion", ""),
+                lead.get("website", ""),
+                lead.get("rating"),
+                lead.get("total_reviews", 0),
+            )
+        )
+        conn.commit()
+        return True
+    except Exception as e:
+        print(f"Error guardando lead: {e}")
+        conn.rollback()
+        return False
+    finally:
+        cursor.close()
+        conn.close()
+
+
+async def scrape_google_maps(query: str, ciudad: str, max_results: int = 50):
+    """Extrae negocios de Google Maps para la búsqueda dada."""
+    leads = []
+
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        context = await browser.new_context(
+            user_agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"
+        )
+        page = await context.new_page()
+
+        search_url = f"https://www.google.com/maps/search/{query}+{ciudad}"
+        print(f"Buscando: {query} en {ciudad}")
+        await page.goto(search_url, wait_until="networkidle")
+        await page.wait_for_timeout(3000)
+
+        # Scroll para cargar más resultados
+        results_panel = page.locator('div[role="feed"]')
+        for _ in range(10):
+            await results_panel.evaluate("el => el.scrollTop += 1000")
+            await page.wait_for_timeout(1500)
+            items = await page.locator('div[role="feed"] > div > div[jsaction]').count()
+            if items >= max_results:
+                break
+
+        # Extraer cada resultado
+        items = await page.locator('div[role="feed"] > div > div[jsaction]').all()
+        print(f"Encontrados {len(items)} resultados")
+
+        for i, item in enumerate(items[:max_results]):
+            try:
+                await item.click()
+                await page.wait_for_timeout(2000)
+
+                lead = {"ciudad": ciudad, "rubro": query}
+
+                # Nombre del negocio
+                name_el = page.locator('h1.DUwDvf, h1[class*="fontHeadlineLarge"]').first
+                lead["nombre"] = await name_el.inner_text() if await name_el.count() else ""
+                lead["empresa"] = lead["nombre"]
+
+                # Dirección
+                addr_el = page.locator('button[data-item-id="address"]').first
+                lead["direccion"] = await addr_el.inner_text() if await addr_el.count() else ""
+
+                # Teléfono
+                phone_el = page.locator('button[data-item-id^="phone"]').first
+                phone_text = await phone_el.inner_text() if await phone_el.count() else ""
+                lead["telefono"] = re.sub(r"[^\d+\s\-()]", "", phone_text).strip()
+
+                # Website
+                web_el = page.locator('a[data-item-id="authority"]').first
+                lead["website"] = await web_el.get_attribute("href") if await web_el.count() else ""
+
+                # Rating
+                rating_el = page.locator('div.F7nice span[aria-hidden="true"]').first
+                try:
+                    rating_text = await rating_el.inner_text() if await rating_el.count() else "0"
+                    lead["rating"] = float(rating_text.replace(",", "."))
+                except (ValueError, TypeError):
+                    lead["rating"] = None
+
+                # Reviews
+                reviews_el = page.locator('div.F7nice span[aria-label*="reseña"]').first
+                try:
+                    reviews_text = await reviews_el.inner_text() if await reviews_el.count() else "0"
+                    lead["total_reviews"] = int(re.sub(r"[^\d]", "", reviews_text) or 0)
+                except (ValueError, TypeError):
+                    lead["total_reviews"] = 0
+
+                lead["email"] = ""  # Email requiere visitar el website
+
+                if lead.get("nombre"):
+                    saved = save_lead(lead)
+                    action = "GUARDADO" if saved else "DUPLICADO"
+                    print(f"[{i+1}] {action}: {lead['nombre']} | {lead.get('telefono','')} | {lead.get('rating','')}")
+                    if saved:
+                        leads.append(lead)
+
+            except Exception as e:
+                print(f"Error procesando resultado {i+1}: {e}")
+                continue
+
+        await browser.close()
+
+    return leads
+
+
+async def main():
+    busquedas = [
+        ("restaurantes", "Temuco"),
+        ("ferreterías", "Temuco"),
+        ("talleres mecánicos", "Temuco"),
+        ("clínicas dentales", "Temuco"),
+        ("gimnasios", "Temuco"),
+    ]
+
+    total = 0
+    for query, ciudad in busquedas:
+        leads = await scrape_google_maps(query, ciudad, max_results=30)
+        total += len(leads)
+        print(f"→ {len(leads)} nuevos leads guardados para '{query}' en {ciudad}\n")
+
+    print(f"\nTotal leads nuevos: {total}")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

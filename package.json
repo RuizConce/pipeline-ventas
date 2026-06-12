@@ -1,0 +1,26 @@
+{
+  "name": "pipeline-ventas",
+  "version": "1.0.0",
+  "description": "Pipeline de ventas automatizado con scraping, CRM y email outreach",
+  "main": "crm/server.js",
+  "scripts": {
+    "start": "node crm/server.js",
+    "dev": "nodemon crm/server.js",
+    "scrape": "python3 scraper/google_maps.py",
+    "email": "node outreach/email.js",
+    "db:init": "mysql -h $DB_HOST -P $DB_PORT -u $DB_USER -p$DB_PASSWORD $DB_NAME < db/schema.sql"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "mysql2": "^3.9.7",
+    "resend": "^3.2.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.1"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

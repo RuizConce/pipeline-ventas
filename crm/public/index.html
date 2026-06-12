@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pipeline de Ventas - ConectaCSur</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Segoe UI', system-ui, sans-serif; background: #f1f5f9; color: #1e293b; }
+    header { background: #2563eb; color: #fff; padding: 16px 24px; display: flex; align-items: center; justify-content: space-between; }
+    header h1 { font-size: 1.25rem; font-weight: 700; }
+    .stats-bar { display: flex; gap: 16px; padding: 16px 24px; background: #fff; border-bottom: 1px solid #e2e8f0; flex-wrap: wrap; }
+    .stat-card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px 20px; text-align: center; min-width: 100px; }
+    .stat-card .num { font-size: 1.75rem; font-weight: 700; color: #2563eb; }
+    .stat-card .lbl { font-size: 0.75rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; }
+    .controls { padding: 16px 24px; display: flex; gap: 12px; flex-wrap: wrap; }
+    .controls input, .controls select { padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 0.875rem; outline: none; }
+    .controls input:focus, .controls select:focus { border-color: #2563eb; }
+    .controls input { flex: 1; min-width: 200px; }
+    table { width: 100%; border-collapse: collapse; background: #fff; }
+    thead { background: #f8fafc; }
+    th, td { padding: 12px 16px; text-align: left; border-bottom: 1px solid #e2e8f0; font-size: 0.875rem; }
+    th { font-weight: 600; color: #475569; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; }
+    tr:hover { background: #f8fafc; }
+    .badge { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 0.75rem; font-weight: 600; }
+    .badge-nuevo { background: #dbeafe; color: #1d4ed8; }
+    .badge-contactado { background: #fef9c3; color: #854d0e; }
+    .badge-interesado { background: #dcfce7; color: #166534; }
+    .badge-propuesta { background: #f3e8ff; color: #6b21a8; }
+    .badge-cerrado { background: #d1fae5; color: #065f46; }
+    .badge-descartado { background: #fee2e2; color: #991b1b; }
+    .btn { padding: 6px 14px; border: none; border-radius: 6px; cursor: pointer; font-size: 0.8rem; font-weight: 500; }
+    .btn-primary { background: #2563eb; color: #fff; }
+    .btn-primary:hover { background: #1d4ed8; }
+    .btn-sm { padding: 4px 10px; font-size: 0.75rem; }
+    .btn-outline { background: transparent; border: 1px solid #cbd5e1; color: #475569; }
+    .btn-outline:hover { background: #f1f5f9; }
+    .pagination { display: flex; gap: 8px; align-items: center; padding: 16px 24px; }
+    /* Modal */
+    .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 100; align-items: center; justify-content: center; }
+    .modal-overlay.active { display: flex; }
+    .modal { background: #fff; border-radius: 12px; width: 90%; max-width: 640px; max-height: 90vh; overflow-y: auto; padding: 24px; }
+    .modal h2 { font-size: 1.125rem; font-weight: 700; margin-bottom: 16px; }
+    .form-group { margin-bottom: 14px; }
+    .form-group label { display: block; font-size: 0.8rem; font-weight: 600; color: #475569; margin-bottom: 4px; }
+    .form-group input, .form-group select, .form-group textarea { width: 100%; padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 0.875rem; }
+    .form-group textarea { min-height: 80px; resize: vertical; }
+    .modal-footer { display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px; }
+    .history { margin-top: 20px; border-top: 1px solid #e2e8f0; padding-top: 16px; }
+    .history h3 { font-size: 0.9rem; font-weight: 700; margin-bottom: 12px; color: #475569; }
+    .history-item { background: #f8fafc; border-radius: 6px; padding: 10px 14px; margin-bottom: 8px; font-size: 0.8rem; }
+    .history-item .meta { color: #94a3b8; font-size: 0.75rem; margin-top: 4px; }
+    .empty { text-align: center; padding: 48px; color: #94a3b8; }
+    .table-wrapper { overflow-x: auto; }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>Pipeline de Ventas</h1>
+  <span id="headerStats" style="font-size:0.85rem;opacity:0.85"></span>
+</header>
+
+<div class="stats-bar" id="statsBar">
+  <div class="stat-card"><div class="num" id="sTotal">–</div><div class="lbl">Total leads</div></div>
+  <div class="stat-card"><div class="num" id="sNuevo">–</div><div class="lbl">Nuevos</div></div>
+  <div class="stat-card"><div class="num" id="sContactado">–</div><div class="lbl">Contactados</div></div>
+  <div class="stat-card"><div class="num" id="sInteresado">–</div><div class="lbl">Interesados</div></div>
+  <div class="stat-card"><div class="num" id="sPropuesta">–</div><div class="lbl">Propuestas</div></div>
+  <div class="stat-card"><div class="num" id="sCerrado">–</div><div class="lbl">Cerrados</div></div>
+</div>
+
+<div class="controls">
+  <input type="text" id="searchInput" placeholder="Buscar nombre, empresa, email..." oninput="debounceLoad()">
+  <select id="filterEstado" onchange="loadLeads()">
+    <option value="">Todos los estados</option>
+    <option value="nuevo">Nuevo</option>
+    <option value="contactado">Contactado</option>
+    <option value="interesado">Interesado</option>
+    <option value="propuesta">Propuesta</option>
+    <option value="cerrado">Cerrado</option>
+    <option value="descartado">Descartado</option>
+  </select>
+  <select id="filterCiudad" onchange="loadLeads()">
+    <option value="">Todas las ciudades</option>
+    <option value="Temuco">Temuco</option>
+    <option value="Santiago">Santiago</option>
+    <option value="Concepción">Concepción</option>
+  </select>
+</div>
+
+<div class="table-wrapper">
+<table>
+  <thead>
+    <tr>
+      <th>#</th>
+      <th>Nombre / Empresa</th>
+      <th>Rubro</th>
+      <th>Contacto</th>
+      <th>Ciudad</th>
+      <th>Estado</th>
+      <th>Rating</th>
+      <th>Acciones</th>
+    </tr>
+  </thead>
+  <tbody id="leadsBody">
+    <tr><td colspan="8" class="empty">Cargando...</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="pagination">
+  <button class="btn btn-outline btn-sm" onclick="changePage(-1)" id="btnPrev">← Anterior</button>
+  <span id="pageInfo" style="font-size:0.85rem;color:#64748b"></span>
+  <button class="btn btn-outline btn-sm" onclick="changePage(1)" id="btnNext">Siguiente →</button>
+</div>
+
+<!-- Modal detalle lead -->
+<div class="modal-overlay" id="modalOverlay">
+  <div class="modal">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+      <h2 id="modalTitle">Lead</h2>
+      <button class="btn btn-outline btn-sm" onclick="closeModal()">✕ Cerrar</button>
+    </div>
+    <form id="leadForm" onsubmit="saveLead(event)">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div class="form-group">
+          <label>Nombre</label>
+          <input type="text" id="fNombre" required>
+        </div>
+        <div class="form-group">
+          <label>Empresa</label>
+          <input type="text" id="fEmpresa">
+        </div>
+        <div class="form-group">
+          <label>Email</label>
+          <input type="email" id="fEmail">
+        </div>
+        <div class="form-group">
+          <label>Teléfono</label>
+          <input type="text" id="fTelefono">
+        </div>
+        <div class="form-group">
+          <label>Rubro</label>
+          <input type="text" id="fRubro">
+        </div>
+        <div class="form-group">
+          <label>Ciudad</label>
+          <input type="text" id="fCiudad">
+        </div>
+        <div class="form-group">
+          <label>Estado</label>
+          <select id="fEstado">
+            <option value="nuevo">Nuevo</option>
+            <option value="contactado">Contactado</option>
+            <option value="interesado">Interesado</option>
+            <option value="propuesta">Propuesta</option>
+            <option value="cerrado">Cerrado</option>
+            <option value="descartado">Descartado</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Website</label>
+          <input type="text" id="fWebsite">
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Notas</label>
+        <textarea id="fNotas"></textarea>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline" onclick="closeModal()">Cancelar</button>
+        <button type="submit" class="btn btn-primary">Guardar cambios</button>
+      </div>
+    </form>
+
+    <div class="history" id="historySection">
+      <h3>Historial de contactos</h3>
+      <div id="historyList"><em style="color:#94a3b8;font-size:0.8rem">Sin historial</em></div>
+      <div style="margin-top:14px;padding-top:14px;border-top:1px solid #e2e8f0">
+        <h3>Registrar contacto</h3>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px">
+          <div class="form-group">
+            <label>Tipo</label>
+            <select id="cTipo">
+              <option value="llamada">Llamada</option>
+              <option value="email">Email</option>
+              <option value="whatsapp">WhatsApp</option>
+              <option value="reunion">Reunión</option>
+              <option value="otro">Otro</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Nuevo estado</label>
+            <select id="cEstado">
+              <option value="">Sin cambio</option>
+              <option value="contactado">Contactado</option>
+              <option value="interesado">Interesado</option>
+              <option value="propuesta">Propuesta</option>
+              <option value="cerrado">Cerrado</option>
+              <option value="descartado">Descartado</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Resultado / Nota</label>
+          <textarea id="cContenido" placeholder="¿Cómo fue el contacto?"></textarea>
+        </div>
+        <button class="btn btn-primary btn-sm" onclick="saveContacto()">Registrar contacto</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+let currentPage = 1;
+let totalLeads = 0;
+const limit = 50;
+let currentLeadId = null;
+let debounceTimer;
+
+function debounceLoad() {
+  clearTimeout(debounceTimer);
+  debounceTimer = setTimeout(() => { currentPage = 1; loadLeads(); }, 400);
+}
+
+async function loadStats() {
+  const r = await fetch('/api/stats');
+  const d = await r.json();
+  document.getElementById('sTotal').textContent = d.total_leads;
+  const estados = { nuevo: 'sNuevo', contactado: 'sContactado', interesado: 'sInteresado', propuesta: 'sPropuesta', cerrado: 'sCerrado' };
+  for (const [k, v] of Object.entries(estados)) {
+    const found = d.by_estado.find(e => e.estado === k);
+    document.getElementById(v).textContent = found ? found.total : 0;
+  }
+  document.getElementById('headerStats').textContent = `${d.total_leads} leads | ${d.emails_enviados} emails enviados`;
+}
+
+async function loadLeads() {
+  const search = document.getElementById('searchInput').value;
+  const estado = document.getElementById('filterEstado').value;
+  const ciudad = document.getElementById('filterCiudad').value;
+  const params = new URLSearchParams({ page: currentPage, limit });
+  if (search) params.set('search', search);
+  if (estado) params.set('estado', estado);
+  if (ciudad) params.set('ciudad', ciudad);
+
+  const r = await fetch('/api/leads?' + params);
+  const d = await r.json();
+  totalLeads = d.total;
+
+  const tbody = document.getElementById('leadsBody');
+  if (!d.leads.length) {
+    tbody.innerHTML = '<tr><td colspan="8" class="empty">Sin resultados</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = d.leads.map(l => `
+    <tr>
+      <td style="color:#94a3b8">${l.id}</td>
+      <td>
+        <div style="font-weight:600">${l.nombre}</div>
+        ${l.empresa && l.empresa !== l.nombre ? `<div style="font-size:0.75rem;color:#64748b">${l.empresa}</div>` : ''}
+      </td>
+      <td style="color:#64748b">${l.rubro || '–'}</td>
+      <td>
+        ${l.email ? `<div style="font-size:0.8rem">${l.email}</div>` : ''}
+        ${l.telefono ? `<div style="font-size:0.8rem;color:#64748b">${l.telefono}</div>` : ''}
+      </td>
+      <td>${l.ciudad || '–'}</td>
+      <td><span class="badge badge-${l.estado}">${l.estado}</span></td>
+      <td>${l.rating ? `⭐ ${l.rating} (${l.total_reviews})` : '–'}</td>
+      <td>
+        <button class="btn btn-primary btn-sm" onclick="openLead(${l.id})">Ver</button>
+      </td>
+    </tr>
+  `).join('');
+
+  const totalPages = Math.ceil(totalLeads / limit);
+  document.getElementById('pageInfo').textContent = `Página ${currentPage} de ${totalPages} (${totalLeads} leads)`;
+  document.getElementById('btnPrev').disabled = currentPage <= 1;
+  document.getElementById('btnNext').disabled = currentPage >= totalPages;
+}
+
+function changePage(delta) {
+  currentPage += delta;
+  if (currentPage < 1) currentPage = 1;
+  loadLeads();
+}
+
+async function openLead(id) {
+  currentLeadId = id;
+  const r = await fetch(`/api/leads/${id}`);
+  const l = await r.json();
+
+  document.getElementById('modalTitle').textContent = l.nombre;
+  document.getElementById('fNombre').value = l.nombre || '';
+  document.getElementById('fEmpresa').value = l.empresa || '';
+  document.getElementById('fEmail').value = l.email || '';
+  document.getElementById('fTelefono').value = l.telefono || '';
+  document.getElementById('fRubro').value = l.rubro || '';
+  document.getElementById('fCiudad').value = l.ciudad || '';
+  document.getElementById('fEstado').value = l.estado || 'nuevo';
+  document.getElementById('fWebsite').value = l.website || '';
+  document.getElementById('fNotas').value = l.notas || '';
+
+  const histList = document.getElementById('historyList');
+  if (l.contactos && l.contactos.length) {
+    histList.innerHTML = l.contactos.map(c => `
+      <div class="history-item">
+        <strong>${c.tipo}</strong>: ${c.contenido || c.resultado || ''}
+        <div class="meta">${new Date(c.fecha).toLocaleString('es-CL')}</div>
+      </div>
+    `).join('');
+  } else {
+    histList.innerHTML = '<em style="color:#94a3b8;font-size:0.8rem">Sin historial</em>';
+  }
+
+  document.getElementById('modalOverlay').classList.add('active');
+}
+
+function closeModal() {
+  document.getElementById('modalOverlay').classList.remove('active');
+  currentLeadId = null;
+}
+
+async function saveLead(e) {
+  e.preventDefault();
+  const data = {
+    nombre: document.getElementById('fNombre').value,
+    empresa: document.getElementById('fEmpresa').value,
+    email: document.getElementById('fEmail').value,
+    telefono: document.getElementById('fTelefono').value,
+    rubro: document.getElementById('fRubro').value,
+    ciudad: document.getElementById('fCiudad').value,
+    estado: document.getElementById('fEstado').value,
+    website: document.getElementById('fWebsite').value,
+    notas: document.getElementById('fNotas').value,
+  };
+  await fetch(`/api/leads/${currentLeadId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
+  closeModal();
+  loadLeads();
+  loadStats();
+}
+
+async function saveContacto() {
+  const data = {
+    tipo: document.getElementById('cTipo').value,
+    contenido: document.getElementById('cContenido').value,
+    nuevo_estado: document.getElementById('cEstado').value || undefined,
+  };
+  await fetch(`/api/leads/${currentLeadId}/contactos`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
+  document.getElementById('cContenido').value = '';
+  openLead(currentLeadId);
+  loadStats();
+}
+
+document.getElementById('modalOverlay').addEventListener('click', e => {
+  if (e.target === document.getElementById('modalOverlay')) closeModal();
+});
+
+loadStats();
+loadLeads();
+</script>
+</body>
+</html>
