@@ -75,8 +75,21 @@ async def scrape_google_maps(query: str, ciudad: str, max_results: int = 50, cli
     """Extrae negocios de Google Maps para la búsqueda dada."""
     leads = []
 
+    # Detectar ejecutable de Chromium instalado por Playwright en el entorno
+    import shutil
+    _chromium_candidates = [
+        "/opt/pw-browsers/chromium-1194/chrome-linux/chrome",
+        shutil.which("chromium") or "",
+        shutil.which("chromium-browser") or "",
+        shutil.which("google-chrome") or "",
+    ]
+    _chromium_exe = next((p for p in _chromium_candidates if p and os.path.isfile(p)), None)
+    _launch_kwargs = {"headless": True, "args": ["--ignore-certificate-errors", "--no-sandbox"]}
+    if _chromium_exe:
+        _launch_kwargs["executable_path"] = _chromium_exe
+
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
+        browser = await p.chromium.launch(**_launch_kwargs)
         context = await browser.new_context(
             user_agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"
         )
