@@ -506,7 +506,13 @@ async function runScraper() {
         try {
           const msg = JSON.parse(line);
           if (msg.type === 'log') scraperLine(term, msg.line);
-          else if (msg.type === 'err') scraperLine(term, '⚠ ' + msg.line);
+          else if (msg.type === 'err') {
+            const d = document.createElement('div');
+            d.className = 'log-err';
+            d.textContent = '⚠ ' + msg.line;
+            term.appendChild(d);
+            term.scrollTop = term.scrollHeight;
+          }
           else if (msg.type === 'done') {
             const doneDiv = document.createElement('div');
             doneDiv.className = 'log-done';

@@ -192,6 +192,16 @@ app.post('/api/scraper/run', (req, res) => {
     env: { ...process.env },
   });
 
+  // Matar el proceso si tarda más de 2 minutos
+  const timer = setTimeout(() => {
+    if (!child.killed) {
+      child.kill('SIGTERM');
+      send({ type: 'err', line: '[TIMEOUT] El proceso tardó más de 120 s y fue terminado.' });
+      send({ type: 'done', code: 1 });
+      res.end();
+    }
+  }, 120000);
+
   child.stdout.on('data', (chunk) => {
     chunk.toString().split('\n').filter(Boolean).forEach(line => {
       send({ type: 'log', line });
@@ -199,24 +209,30 @@ app.post('/api/scraper/run', (req, res) => {
   });
 
   child.stderr.on('data', (chunk) => {
+    // Python escribe tracebacks y warnings en stderr — los marcamos [stderr]
     chunk.toString().split('\n').filter(Boolean).forEach(line => {
-      send({ type: 'err', line });
+      send({ type: 'err', line: `[stderr] ${line}` });
     });
   });
 
   child.on('close', (code) => {
+    clearTimeout(timer);
     send({ type: 'done', code });
     res.end();
   });
 
   child.on('error', (err) => {
-    send({ type: 'err', line: `Error al iniciar proceso: ${err.message}` });
+    clearTimeout(timer);
+    send({ type: 'err', line: `[spawn] Error al iniciar proceso: ${err.message}` });
     send({ type: 'done', code: 1 });
     res.end();
   });
 
-  // Si el cliente se desconecta, matar el proceso
-  req.on('close', () => { if (!child.killed) child.kill(); });
+  // Si el cliente se desconecta, limpiar
+  req.on('close', () => {
+    clearTimeout(timer);
+    if (!child.killed) child.kill('SIGTERM');
+  });
 });
 
 // GET /api/scraper/scripts — lista de scrapers disponibles
