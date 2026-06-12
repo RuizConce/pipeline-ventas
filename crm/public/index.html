@@ -52,6 +52,22 @@
     .history-item .meta { color: #94a3b8; font-size: 0.75rem; margin-top: 4px; }
     .empty { text-align: center; padding: 48px; color: #94a3b8; }
     .table-wrapper { overflow-x: auto; }
+    /* Panel scraper */
+    .scraper-panel { background: #fff; border-bottom: 1px solid #e2e8f0; padding: 0; }
+    .scraper-toggle { width: 100%; padding: 12px 24px; background: none; border: none; border-bottom: 1px solid #e2e8f0; text-align: left; cursor: pointer; font-size: 0.875rem; font-weight: 600; color: #475569; display: flex; align-items: center; gap: 8px; }
+    .scraper-toggle:hover { background: #f8fafc; }
+    .scraper-body { display: none; padding: 16px 24px; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
+    .scraper-body.open { display: flex; }
+    .scraper-body .form-group { margin: 0; min-width: 140px; }
+    .scraper-body label { display: block; font-size: 0.75rem; font-weight: 600; color: #64748b; margin-bottom: 4px; }
+    .scraper-body input, .scraper-body select { width: 100%; padding: 7px 10px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 0.875rem; }
+    .terminal { background: #0f172a; color: #94a3b8; font-family: 'Courier New', monospace; font-size: 0.78rem; padding: 12px 16px; border-radius: 8px; max-height: 260px; overflow-y: auto; white-space: pre-wrap; margin-top: 12px; width: 100%; display: none; }
+    .terminal.active { display: block; }
+    .terminal .log-start { color: #60a5fa; }
+    .terminal .log-ok    { color: #34d399; }
+    .terminal .log-dup   { color: #94a3b8; }
+    .terminal .log-err   { color: #f87171; }
+    .terminal .log-done  { color: #fbbf24; font-weight: bold; }
   </style>
 </head>
 <body>
@@ -60,6 +76,43 @@
   <h1>Pipeline de Ventas</h1>
   <span id="headerStats" style="font-size:0.85rem;opacity:0.85"></span>
 </header>
+
+<div class="scraper-panel">
+  <button class="scraper-toggle" onclick="toggleScraper()">
+    <span id="scraperArrow">▶</span> Ejecutar Scraper Google Maps
+  </button>
+  <div class="scraper-body" id="scraperBody">
+    <div class="form-group">
+      <label>Rubro</label>
+      <input type="text" id="sRubro" placeholder="ej: restaurantes" value="junta vecinal">
+    </div>
+    <div class="form-group">
+      <label>Ciudad</label>
+      <input type="text" id="sCiudad" placeholder="ej: Santiago" value="Santiago">
+    </div>
+    <div class="form-group" style="min-width:80px">
+      <label>Máx</label>
+      <input type="number" id="sMax" value="15" min="1" max="100">
+    </div>
+    <div class="form-group">
+      <label>Producto</label>
+      <input type="text" id="sProducto" value="WEB">
+    </div>
+    <div class="form-group">
+      <label>Cliente</label>
+      <select id="sCliente">
+        <option value="Conecta CSur">Conecta CSur</option>
+        <option value="Estética Andaluz">Estética Andaluz</option>
+        <option value="Dist. Patagonia">Dist. Patagonia</option>
+      </select>
+    </div>
+    <div class="form-group" style="min-width:auto">
+      <label>&nbsp;</label>
+      <button class="btn btn-primary" id="btnRunScraper" onclick="runScraper()">▶ Ejecutar</button>
+    </div>
+    <div class="terminal" id="scraperTerminal"></div>
+  </div>
+</div>
 
 <div class="stats-bar" id="statsBar">
   <div class="stat-card"><div class="num" id="sTotal">–</div><div class="lbl">Total leads</div></div>
@@ -384,6 +437,97 @@ document.getElementById('modalOverlay').addEventListener('click', e => {
   if (e.target === document.getElementById('modalOverlay')) closeModal();
 });
 
+// ── Scraper panel ──────────────────────────────────────────────
+function toggleScraper() {
+  const body = document.getElementById('scraperBody');
+  const arrow = document.getElementById('scraperArrow');
+  const open = body.classList.toggle('open');
+  arrow.textContent = open ? '▼' : '▶';
+}
+
+function scraperLine(term, text) {
+  const div = document.createElement('div');
+  if (text.includes('GUARDADO')) div.className = 'log-ok';
+  else if (text.includes('DUPLICADO')) div.className = 'log-dup';
+  else if (text.includes('Error') || text.includes('ERROR')) div.className = 'log-err';
+  div.textContent = text;
+  term.appendChild(div);
+  term.scrollTop = term.scrollHeight;
+}
+
+async function runScraper() {
+  const rubro   = document.getElementById('sRubro').value.trim();
+  const ciudad  = document.getElementById('sCiudad').value.trim();
+  const max     = document.getElementById('sMax').value;
+  const producto = document.getElementById('sProducto').value.trim();
+  const cliente  = document.getElementById('sCliente').value;
+
+  if (!rubro || !ciudad) { alert('Rubro y ciudad son requeridos'); return; }
+
+  const term = document.getElementById('scraperTerminal');
+  term.innerHTML = '';
+  term.classList.add('active');
+
+  const btn = document.getElementById('btnRunScraper');
+  btn.disabled = true;
+  btn.textContent = '⏳ Corriendo...';
+
+  const startDiv = document.createElement('div');
+  startDiv.className = 'log-start';
+  startDiv.textContent = `▶ Iniciando: "${rubro}" en ${ciudad} (max ${max}) ...`;
+  term.appendChild(startDiv);
+
+  try {
+    const resp = await fetch('/api/scraper/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rubro, ciudad, max: parseInt(max), producto, cliente }),
+    });
+
+    if (!resp.ok) {
+      const err = await resp.json();
+      scraperLine(term, `ERROR: ${err.error}`);
+      return;
+    }
+
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const parts = buf.split('\n\n');
+      buf = parts.pop();
+      for (const part of parts) {
+        const line = part.replace(/^data: /, '').trim();
+        if (!line) continue;
+        try {
+          const msg = JSON.parse(line);
+          if (msg.type === 'log') scraperLine(term, msg.line);
+          else if (msg.type === 'err') scraperLine(term, '⚠ ' + msg.line);
+          else if (msg.type === 'done') {
+            const doneDiv = document.createElement('div');
+            doneDiv.className = 'log-done';
+            doneDiv.textContent = msg.code === 0 ? '✓ Scraping completado' : `✗ Proceso terminó con código ${msg.code}`;
+            term.appendChild(doneDiv);
+            term.scrollTop = term.scrollHeight;
+            loadLeads();
+            loadStats();
+          }
+        } catch (_) { scraperLine(term, line); }
+      }
+    }
+  } catch (e) {
+    scraperLine(term, `Error de conexión: ${e.message}`);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '▶ Ejecutar';
+  }
+}
+
+// ── Init ────────────────────────────────────────────────────────
 loadStats();
 loadLeads();
 </script>

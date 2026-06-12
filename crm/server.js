@@ -2,6 +2,7 @@ const express = require('express');
 const mysql = require('mysql2/promise');
 const cors = require('cors');
 const path = require('path');
+const { spawn } = require('child_process');
 require('dotenv').config();
 
 const app = express();
@@ -150,6 +151,77 @@ app.delete('/api/leads/:id', async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// POST /api/scraper/run — ejecuta google_maps.py como proceso hijo, streama output via SSE
+app.post('/api/scraper/run', (req, res) => {
+  const { rubro, ciudad, max = 15, producto = '', cliente = 'Conecta CSur' } = req.body;
+
+  if (!rubro || !ciudad) {
+    return res.status(400).json({ error: 'rubro y ciudad son requeridos' });
+  }
+
+  // Validar que los inputs no contengan caracteres peligrosos (prevenir inyección)
+  const safePattern = /^[a-zA-ZáéíóúÁÉÍÓÚñÑüÜ\s\-\.]+$/;
+  if (!safePattern.test(rubro) || !safePattern.test(ciudad)) {
+    return res.status(400).json({ error: 'rubro y ciudad solo pueden contener letras, espacios y guiones' });
+  }
+  const maxInt = Math.min(Math.max(parseInt(max) || 15, 1), 100);
+
+  // Cabeceras SSE para streaming en tiempo real
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders();
+
+  const send = (data) => res.write(`data: ${JSON.stringify(data)}\n\n`);
+
+  send({ type: 'start', rubro, ciudad, max: maxInt, producto, cliente });
+
+  const scraperPath = path.join(__dirname, '..', 'scraper', 'google_maps.py');
+  // spawn con array de args — no hay interpolación de shell, seguro contra inyección
+  const child = spawn('python3', [
+    scraperPath,
+    '--rubro', rubro,
+    '--ciudad', ciudad,
+    '--max', String(maxInt),
+    '--producto', producto,
+    '--cliente', cliente,
+  ], {
+    cwd: path.join(__dirname, '..'),
+    env: { ...process.env },
+  });
+
+  child.stdout.on('data', (chunk) => {
+    chunk.toString().split('\n').filter(Boolean).forEach(line => {
+      send({ type: 'log', line });
+    });
+  });
+
+  child.stderr.on('data', (chunk) => {
+    chunk.toString().split('\n').filter(Boolean).forEach(line => {
+      send({ type: 'err', line });
+    });
+  });
+
+  child.on('close', (code) => {
+    send({ type: 'done', code });
+    res.end();
+  });
+
+  child.on('error', (err) => {
+    send({ type: 'err', line: `Error al iniciar proceso: ${err.message}` });
+    send({ type: 'done', code: 1 });
+    res.end();
+  });
+
+  // Si el cliente se desconecta, matar el proceso
+  req.on('close', () => { if (!child.killed) child.kill(); });
+});
+
+// GET /api/scraper/scripts — lista de scrapers disponibles
+app.get('/api/scraper/scripts', (_req, res) => {
+  res.json({ scripts: ['google_maps', 'instagram'] });
 });
 
 // Health check
