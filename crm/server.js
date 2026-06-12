@@ -25,7 +25,7 @@ const pool = mysql.createPool({
 // GET /api/leads — listar leads con filtros opcionales
 app.get('/api/leads', async (req, res) => {
   try {
-    const { estado, ciudad, cliente, search, page = 1, limit = 50 } = req.query;
+    const { estado, ciudad, cliente, producto, search, page = 1, limit = 50 } = req.query;
     const offset = (parseInt(page) - 1) * parseInt(limit);
 
     let where = [];
@@ -34,6 +34,7 @@ app.get('/api/leads', async (req, res) => {
     if (estado) { where.push('estado = ?'); params.push(estado); }
     if (ciudad) { where.push('ciudad = ?'); params.push(ciudad); }
     if (cliente) { where.push('cliente = ?'); params.push(cliente); }
+    if (producto) { where.push('producto = ?'); params.push(producto); }
     if (search) {
       where.push('(nombre LIKE ? OR empresa LIKE ? OR email LIKE ?)');
       params.push(`%${search}%`, `%${search}%`, `%${search}%`);
@@ -82,7 +83,7 @@ app.get('/api/leads/:id', async (req, res) => {
 // PUT /api/leads/:id — actualizar estado o datos
 app.put('/api/leads/:id', async (req, res) => {
   try {
-    const allowed = ['nombre', 'empresa', 'telefono', 'email', 'ciudad', 'rubro', 'estado', 'notas', 'website', 'cliente'];
+    const allowed = ['nombre', 'empresa', 'telefono', 'email', 'ciudad', 'rubro', 'estado', 'notas', 'website', 'cliente', 'producto'];
     const updates = {};
     for (const key of allowed) {
       if (req.body[key] !== undefined) updates[key] = req.body[key];

@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS leads (
   total_reviews INT DEFAULT 0,
   fuente VARCHAR(100) DEFAULT 'google_maps',
   cliente VARCHAR(100) DEFAULT 'Conecta CSur',
+  producto VARCHAR(100) DEFAULT '',
   estado ENUM('nuevo','contactado','interesado','propuesta','cerrado','descartado') DEFAULT 'nuevo',
   notas TEXT,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -54,4 +55,6 @@ CREATE INDEX idx_emails_lead ON emails_enviados(lead_id);
 
 -- Migraciones (ejecutar en DB existente)
 -- ALTER TABLE leads ADD COLUMN cliente VARCHAR(100) DEFAULT 'Conecta CSur' AFTER fuente;
+-- ALTER TABLE leads ADD COLUMN producto VARCHAR(100) DEFAULT '' AFTER cliente;
 -- ALTER TABLE leads ADD INDEX idx_cliente (cliente);
+-- ALTER TABLE leads ADD INDEX idx_producto (producto);
