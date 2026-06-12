@@ -16,6 +16,7 @@ import shutil
 import mysql.connector
 from pathlib import Path
 from dotenv import load_dotenv
+from scraper.browser_utils import get_launch_kwargs
 
 load_dotenv()
 
@@ -141,15 +142,6 @@ def parse_seguidores(texto: str) -> int:
     except (ValueError, TypeError):
         return 0
 
-
-def get_chromium_exe() -> str | None:
-    candidates = [
-        "/opt/pw-browsers/chromium-1194/chrome-linux/chrome",
-        shutil.which("chromium") or "",
-        shutil.which("chromium-browser") or "",
-        shutil.which("google-chrome") or "",
-    ]
-    return next((p for p in candidates if p and os.path.isfile(p)), None)
 
 
 async def save_cookies(context) -> None:
@@ -432,22 +424,16 @@ async def scrape_instagram(hashtags: list[str], ciudad: str, cliente: str,
     """Ejecuta el scraper sobre la lista de hashtags dados."""
     from playwright.async_api import async_playwright
 
-    chromium_exe = get_chromium_exe()
-    launch_kwargs = {
-        "headless": True,
-        "args": [
-            "--ignore-certificate-errors",
-            "--no-sandbox",
-            "--disable-blink-features=AutomationControlled",
-        ],
-    }
-    if chromium_exe:
-        launch_kwargs["executable_path"] = chromium_exe
+    _launch_kw = get_launch_kwargs()
+    # Instagram: user-agent móvil es más efectivo para evitar bloqueos
+    _launch_kw.setdefault("args", [])
+    if "--disable-blink-features=AutomationControlled" not in _launch_kw["args"]:
+        _launch_kw["args"].append("--disable-blink-features=AutomationControlled")
 
     all_leads = []
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(**launch_kwargs)
+        browser = await p.chromium.launch(**_launch_kw)
         context = await browser.new_context(
             user_agent=(
                 "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) "

@@ -1,0 +1,12 @@
+[phases.setup]
+nixPkgs = ["python311", "python311Packages.pip"]
+
+[phases.install]
+cmds = [
+  "npm install --production",
+  "pip install -r requirements.txt",
+  "playwright install --with-deps chromium"
+]
+
+[start]
+cmd = "node crm/server.js"
