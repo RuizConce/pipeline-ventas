@@ -2,7 +2,6 @@ const express = require('express');
 const mysql = require('mysql2/promise');
 const cors = require('cors');
 const path = require('path');
-const { spawn, execSync } = require('child_process');
 require('dotenv').config();
 
 const app = express();
@@ -153,20 +152,136 @@ app.delete('/api/leads/:id', async (req, res) => {
   }
 });
 
-// POST /api/scraper/run — diagnóstico: confirmar Python disponible
-app.post('/api/scraper/run', (req, res) => {
-  res.setHeader('Content-Type', 'text/plain');
+// ── Google Places helpers ────────────────────────────────────────────────────
+
+async function placesTextSearch(query, apiKey) {
+  const url = `https://maps.googleapis.com/maps/api/place/textsearch/json` +
+    `?query=${encodeURIComponent(query)}&language=es&key=${apiKey}`;
+  const r = await fetch(url);
+  return r.json();
+}
+
+async function placesDetails(placeId, apiKey) {
+  const url = `https://maps.googleapis.com/maps/api/place/details/json` +
+    `?place_id=${placeId}&fields=formatted_phone_number,website&language=es&key=${apiKey}`;
+  const r = await fetch(url);
+  const d = await r.json();
+  return d.result || {};
+}
+
+async function saveLeadJS(lead) {
+  const [[dup]] = await pool.query(
+    `SELECT id FROM leads WHERE
+     (telefono != '' AND telefono IS NOT NULL AND telefono = ?) OR
+     (nombre = ? AND ciudad = ? AND fuente = 'google_maps')
+     LIMIT 1`,
+    [lead.telefono || '', lead.nombre, lead.ciudad]
+  );
+  if (dup) return false;
+
+  await pool.query(
+    `INSERT INTO leads
+     (nombre, empresa, rubro, telefono, email, ciudad, direccion,
+      website, rating, total_reviews, fuente, cliente, producto)
+     VALUES (?,?,?,?,'',?,?,?,?,?,'google_maps',?,?)`,
+    [
+      lead.nombre, lead.nombre, lead.rubro,
+      lead.telefono || '', lead.ciudad, lead.direccion || '',
+      lead.website || '', lead.rating ?? null, lead.total_reviews || 0,
+      lead.cliente, lead.producto,
+    ]
+  );
+  return true;
+}
+
+// POST /api/scraper/run — Google Places API desde Node.js, SSE en tiempo real
+app.post('/api/scraper/run', async (req, res) => {
+  const { rubro, ciudad, max = 15, producto = '', cliente = 'Conecta CSur' } = req.body;
+
+  if (!rubro || !ciudad) {
+    return res.status(400).json({ error: 'rubro y ciudad son requeridos' });
+  }
+
+  const safePattern = /^[a-zA-ZáéíóúÁÉÍÓÚñÑüÜ\s\-\.]+$/;
+  if (!safePattern.test(rubro) || !safePattern.test(ciudad)) {
+    return res.status(400).json({ error: 'rubro y ciudad solo pueden contener letras, espacios y guiones' });
+  }
+
+  const maxInt = Math.min(Math.max(parseInt(max) || 15, 1), 100);
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders();
+
+  const send = (data) => res.write(`data: ${JSON.stringify(data)}\n\n`);
+
+  send({ type: 'start', rubro, ciudad, max: maxInt });
+
+  const apiKey = process.env.GOOGLE_API_KEY;
+  if (!apiKey) {
+    send({ type: 'err', line: 'ERROR: GOOGLE_API_KEY no configurado en Railway Variables.' });
+    send({ type: 'err', line: '→ Activa "Places API" en console.cloud.google.com y agrega la clave.' });
+    send({ type: 'done', code: 1 });
+    return res.end();
+  }
+
   try {
-    const out = execSync('which python3 || echo NO_PYTHON', { timeout: 10000 });
-    res.send(out.toString());
-  } catch (e) {
-    res.send('ERROR: ' + e.message);
+    send({ type: 'log', line: `Buscando: "${rubro}" en ${ciudad}...` });
+
+    const searchData = await placesTextSearch(`${rubro} en ${ciudad}`, apiKey);
+
+    if (searchData.status !== 'OK' && searchData.status !== 'ZERO_RESULTS') {
+      send({ type: 'err', line: `Google API error: ${searchData.status} — ${searchData.error_message || ''}` });
+      send({ type: 'done', code: 1 });
+      return res.end();
+    }
+
+    const places = (searchData.results || []).slice(0, maxInt);
+    send({ type: 'log', line: `Encontrados: ${places.length} resultados` });
+
+    let saved = 0, dups = 0;
+
+    for (let i = 0; i < places.length; i++) {
+      const p = places[i];
+
+      // Obtener teléfono y website con una llamada de detalle
+      let phone = '', website = '';
+      try {
+        const details = await placesDetails(p.place_id, apiKey);
+        phone   = details.formatted_phone_number || '';
+        website = details.website || '';
+      } catch (_) { /* detalles no críticos */ }
+
+      const ok = await saveLeadJS({
+        nombre: p.name, rubro, ciudad,
+        direccion: p.formatted_address || '',
+        telefono: phone, website,
+        rating: p.rating ?? null,
+        total_reviews: p.user_ratings_total || 0,
+        cliente, producto,
+      });
+
+      ok ? saved++ : dups++;
+      const tag   = ok ? 'GUARDADO' : 'DUPLICADO';
+      const stars = p.rating ? `⭐ ${p.rating}` : '';
+      send({ type: 'log', line: `[${i + 1}] ${tag}: ${p.name} | ${phone} | ${stars}` });
+    }
+
+    send({ type: 'log', line: `\n→ ${saved} guardados, ${dups} duplicados` });
+    send({ type: 'done', code: 0 });
+    res.end();
+
+  } catch (err) {
+    send({ type: 'err', line: `Error inesperado: ${err.message}` });
+    send({ type: 'done', code: 1 });
+    res.end();
   }
 });
 
-// GET /api/scraper/scripts — lista de scrapers disponibles
+// GET /api/scraper/scripts
 app.get('/api/scraper/scripts', (_req, res) => {
-  res.json({ scripts: ['google_maps', 'instagram'] });
+  res.json({ scripts: ['google_maps'] });
 });
 
 // Health check
