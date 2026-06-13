@@ -181,7 +181,7 @@ app.post('/api/scraper/run', (req, res) => {
   const scraperPath = path.join(__dirname, '..', 'scraper', 'google_maps.py');
   // spawn con array de args — no hay interpolación de shell, seguro contra inyección
   const child = spawn('python3', [
-    scraperPath,
+    '-u', scraperPath,
     '--rubro', rubro,
     '--ciudad', ciudad,
     '--max', String(maxInt),

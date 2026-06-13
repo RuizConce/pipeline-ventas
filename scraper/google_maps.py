@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+import sys
+print("INICIANDO SCRIPT", flush=True)
+sys.stdout.flush()
+
 """
 Google Maps scraper para extraer leads de negocios locales.
 Usa Playwright para automatizar la búsqueda en Google Maps.
