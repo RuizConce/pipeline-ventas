@@ -97,6 +97,10 @@
     .campaign-result { margin-top: 10px; padding: 10px 14px; border-radius: 6px; font-size: 0.875rem; display: none; }
     .campaign-result.ok  { background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; display: block; }
     .campaign-result.err { background: #fef2f2; color: #991b1b; border: 1px solid #fecaca; display: block; }
+    /* Enriquecimiento */
+    .enrich-btn { background: none; border: none; cursor: pointer; padding: 1px 4px; font-size: 0.78rem; color: #94a3b8; border-radius: 3px; line-height: 1; vertical-align: middle; }
+    .enrich-btn:hover:not(:disabled) { background: #f1f5f9; color: #2563eb; }
+    .enrich-btn:disabled { opacity: .5; cursor: default; }
   </style>
 </head>
 <body>
@@ -308,6 +312,7 @@
   <select id="filterCliente" onchange="loadLeads()">
     <option value="">Todos los clientes</option>
   </select>
+  <button class="btn btn-outline" onclick="openEnrichModal()" title="Visita el website de cada lead sin email y extrae el contacto automáticamente">🔍 Enriquecer emails</button>
 </div>
 
 <!-- ── Tabla de leads ───────────────────────────────────────────────────── -->
@@ -454,6 +459,20 @@
         <button type="submit" class="btn btn-primary">Crear Lead</button>
       </div>
     </form>
+  </div>
+</div>
+
+<!-- ── Modal: enriquecimiento masivo ──────────────────────────────────────── -->
+<div class="modal-overlay" id="enrichOverlay">
+  <div class="modal" style="max-width:700px">
+    <div class="modal-header">
+      <div>
+        <h2>🔍 Enriquecimiento de emails</h2>
+        <p id="enrichSubtitle" style="font-size:0.82rem;color:#64748b;margin-top:3px">Buscando leads con website pero sin email…</p>
+      </div>
+      <button class="btn btn-outline btn-sm" id="enrichCloseBtn" onclick="closeEnrichModal()">✕ Cerrar</button>
+    </div>
+    <div class="terminal active" id="enrichTerm" style="max-height:360px;display:block"></div>
   </div>
 </div>
 
@@ -607,12 +626,15 @@ async function loadLeads() {
     <tr>
       <td style="color:#94a3b8">${l.id}</td>
       <td>
-        <div style="font-weight:600">${l.nombre}</div>
+        <div style="display:flex;align-items:center;gap:5px">
+          <span style="font-weight:600">${l.nombre}</span>
+          ${l.website && !l.email ? `<button class="enrich-btn" onclick="enrichLead(${l.id},this)" title="Extraer email del website" id="eb-${l.id}">🔍</button>` : ''}
+        </div>
         ${l.empresa && l.empresa !== l.nombre ? `<div style="font-size:0.73rem;color:#64748b">${l.empresa}</div>` : ''}
       </td>
       <td style="color:#64748b">${l.rubro || '–'}</td>
       <td>
-        ${l.email    ? `<div style="font-size:0.8rem">📧 ${l.email}</div>`    : ''}
+        ${l.email    ? `<div style="font-size:0.8rem" id="email-cell-${l.id}">✉️ ${l.email}</div>`    : `<div id="email-cell-${l.id}"></div>`}
         ${l.telefono ? `<div style="font-size:0.8rem;color:#64748b">📞 ${l.telefono}</div>` : ''}
       </td>
       <td>${l.ciudad || '–'}</td>
@@ -957,6 +979,118 @@ async function exportWhatsApp() {
   a.download = 'leads-whatsapp.csv';
   a.click();
   URL.revokeObjectURL(url);
+}
+
+// ── Enriquecimiento de emails ─────────────────────────────────────────────────
+let enrichRunning = false;
+
+function openEnrichModal() {
+  document.getElementById('enrichOverlay').classList.add('active');
+  document.getElementById('enrichTerm').innerHTML = '';
+  document.getElementById('enrichSubtitle').textContent = 'Buscando leads con website pero sin email…';
+  runEnrichment();
+}
+
+function closeEnrichModal() {
+  if (enrichRunning) return;
+  document.getElementById('enrichOverlay').classList.remove('active');
+  loadLeads();
+}
+
+async function runEnrichment() {
+  enrichRunning = true;
+  const term     = document.getElementById('enrichTerm');
+  const closeBtn = document.getElementById('enrichCloseBtn');
+  closeBtn.disabled = true;
+
+  const startDiv = document.createElement('div');
+  startDiv.className = 'log-start';
+  startDiv.textContent = '▶ Iniciando enriquecimiento…';
+  term.appendChild(startDiv);
+
+  try {
+    const resp = await fetch('/api/enrichment/run', { method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ limite: 100 }),
+    });
+    if (!resp.ok) { scraperLine(term, 'ERROR: ' + (await resp.json()).error); return; }
+
+    const reader  = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const parts = buf.split('\n\n');
+      buf = parts.pop();
+      for (const part of parts) {
+        const line = part.replace(/^data: /, '').trim();
+        if (!line) continue;
+        try {
+          const msg = JSON.parse(line);
+          if (msg.type === 'start') {
+            document.getElementById('enrichSubtitle').textContent =
+              msg.total ? `Procesando ${msg.total} leads con website pero sin email…` : 'Sin leads pendientes.';
+          } else if (msg.type === 'log') {
+            scraperLine(term, msg.line);
+          } else if (msg.type === 'err') {
+            const d = document.createElement('div');
+            d.className = 'log-err';
+            d.textContent = '⚠ ' + msg.line;
+            term.appendChild(d);
+            term.scrollTop = term.scrollHeight;
+          } else if (msg.type === 'done') {
+            const d = document.createElement('div');
+            d.className = 'log-done';
+            d.textContent = msg.code === 0
+              ? `✓ Completado — ${msg.updated || 0} emails nuevos encontrados`
+              : '✗ Terminó con error';
+            term.appendChild(d);
+            term.scrollTop = term.scrollHeight;
+          }
+        } catch (_) { scraperLine(term, line); }
+      }
+    }
+  } catch (e) {
+    scraperLine(term, 'Error de conexión: ' + e.message);
+  } finally {
+    enrichRunning = false;
+    closeBtn.disabled = false;
+    loadStats();
+  }
+}
+
+async function enrichLead(id, btn) {
+  btn.textContent = '⏳';
+  btn.disabled = true;
+  try {
+    const r = await fetch(`/api/enrichment/lead/${id}`, { method: 'POST' });
+    const d = await r.json();
+    if (d.updated && d.email) {
+      // Actualizar celda de email en la fila sin recargar la tabla
+      const emailCell = document.getElementById(`email-cell-${id}`);
+      if (emailCell) {
+        emailCell.textContent = '✉️ ' + d.email;
+        emailCell.style.fontSize = '0.8rem';
+      }
+      btn.textContent = '✓';
+      btn.style.color = '#16a34a';
+      loadStats();
+    } else if (d.already) {
+      btn.textContent = '✓';
+      btn.style.color = '#16a34a';
+    } else {
+      btn.textContent = '–';
+      btn.title = 'Sin email encontrado en el website';
+      btn.style.color = '#94a3b8';
+    }
+  } catch (e) {
+    btn.textContent = '⚠';
+    btn.title = 'Error: ' + e.message;
+    btn.disabled = false;
+  }
 }
 
 // ── Scraper Instagram ─────────────────────────────────────────────────────────

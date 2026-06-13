@@ -495,6 +495,86 @@ app.get('/api/scraper/scripts', (_req, res) => {
   res.json({ scripts: ['google_maps', 'instagram'] });
 });
 
+// ── Enriquecimiento de emails ─────────────────────────────────────────────────
+
+// POST /api/enrichment/run — SSE: recorre leads con website sin email
+app.post('/api/enrichment/run', async (req, res) => {
+  const limite = Math.min(parseInt(req.body?.limite) || 100, 500);
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders();
+
+  const send = (data) => res.write(`data: ${JSON.stringify(data)}\n\n`);
+
+  try {
+    const [leads] = await pool.query(
+      `SELECT id, nombre, website FROM leads
+       WHERE website IS NOT NULL AND website != ''
+         AND (email IS NULL OR email = '')
+       ORDER BY id DESC LIMIT ?`,
+      [limite]
+    );
+
+    send({ type: 'start', total: leads.length });
+    if (!leads.length) {
+      send({ type: 'log', line: '✓ No hay leads con website pendientes de enriquecer.' });
+      send({ type: 'done', code: 0, updated: 0 });
+      return res.end();
+    }
+
+    let updated = 0, noEmail = 0;
+
+    for (let i = 0; i < leads.length; i++) {
+      const lead = leads[i];
+      send({ type: 'log', line: `[${i + 1}/${leads.length}] ${lead.nombre}` });
+
+      const email = await extractEmailFromWebsite(lead.website);
+
+      if (email) {
+        await pool.query('UPDATE leads SET email = ? WHERE id = ?', [email, lead.id]);
+        updated++;
+        send({ type: 'log', line: `  ✓ ${email}` });
+      } else {
+        noEmail++;
+        send({ type: 'log', line: `  – sin email` });
+      }
+    }
+
+    send({ type: 'log', line: `\n→ ${updated} emails nuevos / ${noEmail} sin resultado` });
+    send({ type: 'done', code: 0, updated });
+    res.end();
+  } catch (err) {
+    send({ type: 'err', line: `Error: ${err.message}` });
+    send({ type: 'done', code: 1 });
+    res.end();
+  }
+});
+
+// POST /api/enrichment/lead/:id — enriquecer un lead específico
+app.post('/api/enrichment/lead/:id', async (req, res) => {
+  try {
+    const [rows] = await pool.query(
+      'SELECT id, nombre, website, email FROM leads WHERE id = ?', [req.params.id]
+    );
+    if (!rows.length) return res.status(404).json({ error: 'Lead no encontrado' });
+
+    const lead = rows[0];
+    if (!lead.website) return res.status(400).json({ error: 'Sin website' });
+    if (lead.email)    return res.json({ email: lead.email, already: true });
+
+    const email = await extractEmailFromWebsite(lead.website);
+    if (email) {
+      await pool.query('UPDATE leads SET email = ? WHERE id = ?', [email, lead.id]);
+      return res.json({ email, updated: true });
+    }
+    res.json({ email: null, updated: false });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Health check
 app.get('/health', (_req, res) => res.json({ status: 'ok', timestamp: new Date().toISOString() }));
 
