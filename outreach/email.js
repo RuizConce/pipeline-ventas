@@ -47,6 +47,43 @@ const TEMPLATE_PRESENTACION = {
   `,
 };
 
+const TEMPLATE_WEB = {
+  asunto: '¿{{empresa}} tiene página web? Hacemos una en 5 días',
+  html: `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+      <h2 style="color: #0f766e;">Hola {{nombre}},</h2>
+      <p>Soy del equipo de <strong>ConectaCSur</strong> y encontré <strong>{{empresa}}</strong>
+      mientras buscaba negocios destacados en {{ciudad}}.</p>
+      <p>Notamos que muchos negocios de <em>{{rubro}}</em> en Iquique aún no tienen una
+      página web profesional — o tienen una desactualizada — y eso les hace perder clientes
+      todos los días.</p>
+      <p><strong>Lo que ofrecemos:</strong></p>
+      <ul>
+        <li>🌐 Página web profesional lista en <strong>5 días hábiles</strong></li>
+        <li>📱 Diseño adaptado a celular (el 80% de sus clientes busca desde el teléfono)</li>
+        <li>🔍 Posicionamiento en Google para que los encuentren más fácil</li>
+        <li>💬 Integración con WhatsApp para recibir consultas directo</li>
+        <li>🛠️ Sin costos ocultos — precio fijo desde $150.000 CLP</li>
+      </ul>
+      <p>¿Tienen unos minutos esta semana para una llamada rápida?
+      Solo necesitamos 15 minutos para mostrarles ejemplos y cotizar sin compromiso.</p>
+      <p>Responda este email o escríbanos al WhatsApp y con gusto coordinamos.</p>
+      <hr style="border: 1px solid #e5e7eb; margin: 24px 0;">
+      <p style="color: #6b7280; font-size: 0.875rem;">
+        ConectaCSur | ventas@conectacsur.cl<br>
+        <a href="mailto:ventas@conectacsur.cl?subject=No quiero recibir más emails" style="color: #9ca3af;">
+          Cancelar suscripción
+        </a>
+      </p>
+    </div>
+  `,
+};
+
+const TEMPLATES = {
+  presentacion: TEMPLATE_PRESENTACION,
+  web: TEMPLATE_WEB,
+};
+
 async function sendEmailToLead(leadId, templateName = 'presentacion') {
   const [rows] = await pool.query('SELECT * FROM leads WHERE id = ?', [leadId]);
   if (!rows.length) throw new Error(`Lead ${leadId} no encontrado`);
@@ -54,7 +91,7 @@ async function sendEmailToLead(leadId, templateName = 'presentacion') {
   const lead = rows[0];
   if (!lead.email) throw new Error(`Lead ${leadId} no tiene email`);
 
-  const template = templateName === 'presentacion' ? TEMPLATE_PRESENTACION : TEMPLATE_PRESENTACION;
+  const template = TEMPLATES[templateName] || TEMPLATES.presentacion;
   const asunto = buildEmailHtml(lead, template.asunto).replace(/<[^>]*>/g, '');
   const html = buildEmailHtml(lead, template.html);
 
@@ -99,6 +136,7 @@ async function sendBulkEmails(filtros = {}, templateName = 'presentacion', limit
 
   if (filtros.ciudad) { where.push('ciudad = ?'); params.push(filtros.ciudad); }
   if (filtros.rubro) { where.push('rubro LIKE ?'); params.push(`%${filtros.rubro}%`); }
+  if (filtros.cliente) { where.push('cliente = ?'); params.push(filtros.cliente); }
 
   const whereClause = `WHERE ${where.join(' AND ')}`;
   const [leads] = await pool.query(
@@ -135,17 +173,20 @@ if (require.main === module) {
     const filtros = {};
     if (getArg('ciudad')) filtros.ciudad = getArg('ciudad');
     if (getArg('rubro')) filtros.rubro = getArg('rubro');
+    if (getArg('cliente')) filtros.cliente = getArg('cliente');
     const limite = parseInt(getArg('limite') || '50');
-    sendBulkEmails(filtros, 'presentacion', limite)
+    const template = getArg('template') || 'presentacion';
+    sendBulkEmails(filtros, template, limite)
       .then(() => process.exit(0))
       .catch(e => { console.error(e); process.exit(1); });
   } else if (cmd === 'single' && getArg('lead')) {
-    sendEmailToLead(parseInt(getArg('lead')))
+    const template = getArg('template') || 'presentacion';
+    sendEmailToLead(parseInt(getArg('lead')), template)
       .then(r => { console.log(r); process.exit(0); })
       .catch(e => { console.error(e); process.exit(1); });
   } else {
-    console.log('Uso: node outreach/email.js bulk [--ciudad=X] [--rubro=X] [--limite=N]');
-    console.log('     node outreach/email.js single --lead=ID');
+    console.log('Uso: node outreach/email.js bulk [--ciudad=X] [--rubro=X] [--cliente=X] [--template=presentacion|web] [--limite=N]');
+    console.log('     node outreach/email.js single --lead=ID [--template=presentacion|web]');
     process.exit(1);
   }
 }

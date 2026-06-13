@@ -150,6 +150,146 @@ app.delete('/api/leads/:id', async (req, res) => {
   }
 });
 
+// ── Google Places API (New) helpers ─────────────────────────────────────────
+
+const PLACES_FIELD_MASK = [
+  'places.id',
+  'places.displayName',
+  'places.formattedAddress',
+  'places.nationalPhoneNumber',
+  'places.websiteUri',
+  'places.rating',
+  'places.userRatingCount',
+].join(',');
+
+async function placesTextSearch(query, apiKey, pageToken) {
+  const body = { textQuery: query, languageCode: 'es' };
+  if (pageToken) body.pageToken = pageToken;
+
+  const r = await fetch('https://places.googleapis.com/v1/places:searchText', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Goog-Api-Key': apiKey,
+      'X-Goog-FieldMask': PLACES_FIELD_MASK,
+    },
+    body: JSON.stringify(body),
+  });
+  return r.json();
+}
+
+async function saveLeadJS(lead) {
+  const [[dup]] = await pool.query(
+    `SELECT id FROM leads WHERE
+     (telefono != '' AND telefono IS NOT NULL AND telefono = ?) OR
+     (nombre = ? AND ciudad = ? AND fuente = 'google_maps')
+     LIMIT 1`,
+    [lead.telefono || '', lead.nombre, lead.ciudad]
+  );
+  if (dup) return false;
+
+  await pool.query(
+    `INSERT INTO leads
+     (nombre, empresa, rubro, telefono, email, ciudad, direccion,
+      website, rating, total_reviews, fuente, cliente, producto)
+     VALUES (?,?,?,?,'',?,?,?,?,?,'google_maps',?,?)`,
+    [
+      lead.nombre, lead.nombre, lead.rubro,
+      lead.telefono || '', lead.ciudad, lead.direccion || '',
+      lead.website || '', lead.rating ?? null, lead.total_reviews || 0,
+      lead.cliente, lead.producto,
+    ]
+  );
+  return true;
+}
+
+// POST /api/scraper/run — Google Places API desde Node.js, SSE en tiempo real
+app.post('/api/scraper/run', async (req, res) => {
+  const { rubro, ciudad, max = 15, producto = '', cliente = 'Conecta CSur' } = req.body;
+
+  if (!rubro || !ciudad) {
+    return res.status(400).json({ error: 'rubro y ciudad son requeridos' });
+  }
+
+  const safePattern = /^[a-zA-ZáéíóúÁÉÍÓÚñÑüÜ\s\-\.]+$/;
+  if (!safePattern.test(rubro) || !safePattern.test(ciudad)) {
+    return res.status(400).json({ error: 'rubro y ciudad solo pueden contener letras, espacios y guiones' });
+  }
+
+  const maxInt = Math.min(Math.max(parseInt(max) || 15, 1), 100);
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders();
+
+  const send = (data) => res.write(`data: ${JSON.stringify(data)}\n\n`);
+
+  send({ type: 'start', rubro, ciudad, max: maxInt });
+
+  const apiKey = process.env.GOOGLE_API_KEY;
+  if (!apiKey) {
+    send({ type: 'err', line: 'ERROR: GOOGLE_API_KEY no configurado en Railway Variables.' });
+    send({ type: 'err', line: '→ Activa "Places API" en console.cloud.google.com y agrega la clave.' });
+    send({ type: 'done', code: 1 });
+    return res.end();
+  }
+
+  try {
+    send({ type: 'log', line: `Buscando: "${rubro}" en ${ciudad}...` });
+
+    const searchData = await placesTextSearch(`${rubro} en ${ciudad}`, apiKey);
+
+    // La nueva API devuelve error como objeto con campo 'error'
+    if (searchData.error) {
+      const { code, message } = searchData.error;
+      send({ type: 'err', line: `Google API error ${code}: ${message}` });
+      send({ type: 'done', code: 1 });
+      return res.end();
+    }
+
+    const places = (searchData.places || []).slice(0, maxInt);
+    send({ type: 'log', line: `Encontrados: ${places.length} resultados` });
+
+    let saved = 0, dups = 0;
+
+    for (let i = 0; i < places.length; i++) {
+      const p = places[i];
+      // Nueva API: campos con nombres distintos a la legacy
+      const nombre  = p.displayName?.text || '';
+      const phone   = p.nationalPhoneNumber || '';
+      const website = p.websiteUri || '';
+      const stars   = p.rating ? `⭐ ${p.rating}` : '';
+
+      const ok = await saveLeadJS({
+        nombre, rubro, ciudad,
+        direccion: p.formattedAddress || '',
+        telefono: phone, website,
+        rating: p.rating ?? null,
+        total_reviews: p.userRatingCount || 0,
+        cliente, producto,
+      });
+
+      ok ? saved++ : dups++;
+      send({ type: 'log', line: `[${i + 1}] ${ok ? 'GUARDADO' : 'DUPLICADO'}: ${nombre} | ${phone} | ${stars}` });
+    }
+
+    send({ type: 'log', line: `\n→ ${saved} guardados, ${dups} duplicados` });
+    send({ type: 'done', code: 0 });
+    res.end();
+
+  } catch (err) {
+    send({ type: 'err', line: `Error inesperado: ${err.message}` });
+    send({ type: 'done', code: 1 });
+    res.end();
+  }
+});
+
+// GET /api/scraper/scripts
+app.get('/api/scraper/scripts', (_req, res) => {
+  res.json({ scripts: ['google_maps'] });
+});
+
 // Health check
 app.get('/health', (req, res) => res.json({ status: 'ok', timestamp: new Date().toISOString() }));
 
