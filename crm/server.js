@@ -152,23 +152,33 @@ app.delete('/api/leads/:id', async (req, res) => {
   }
 });
 
-// ── Google Places helpers ────────────────────────────────────────────────────
+// ── Google Places API (New) helpers ─────────────────────────────────────────
 
-async function placesTextSearch(query, apiKey) {
-  const url = `https://maps.googleapis.com/maps/api/place/textsearch/json` +
-    `?query=${encodeURIComponent(query)}&language=es&key=${apiKey}`;
-  const r = await fetch(url);
+const PLACES_FIELD_MASK = [
+  'places.id',
+  'places.displayName',
+  'places.formattedAddress',
+  'places.nationalPhoneNumber',
+  'places.websiteUri',
+  'places.rating',
+  'places.userRatingCount',
+].join(',');
+
+async function placesTextSearch(query, apiKey, pageToken) {
+  const body = { textQuery: query, languageCode: 'es' };
+  if (pageToken) body.pageToken = pageToken;
+
+  const r = await fetch('https://places.googleapis.com/v1/places:searchText', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Goog-Api-Key': apiKey,
+      'X-Goog-FieldMask': PLACES_FIELD_MASK,
+    },
+    body: JSON.stringify(body),
+  });
   return r.json();
 }
-
-async function placesDetails(placeId, apiKey) {
-  const url = `https://maps.googleapis.com/maps/api/place/details/json` +
-    `?place_id=${placeId}&fields=formatted_phone_number,website&language=es&key=${apiKey}`;
-  const r = await fetch(url);
-  const d = await r.json();
-  return d.result || {};
-}
-
 async function saveLeadJS(lead) {
   const [[dup]] = await pool.query(
     `SELECT id FROM leads WHERE
@@ -231,41 +241,38 @@ app.post('/api/scraper/run', async (req, res) => {
 
     const searchData = await placesTextSearch(`${rubro} en ${ciudad}`, apiKey);
 
-    if (searchData.status !== 'OK' && searchData.status !== 'ZERO_RESULTS') {
-      send({ type: 'err', line: `Google API error: ${searchData.status} — ${searchData.error_message || ''}` });
+    // La nueva API devuelve error como objeto con campo 'error'
+    if (searchData.error) {
+      const { code, message } = searchData.error;
+      send({ type: 'err', line: `Google API error ${code}: ${message}` });
       send({ type: 'done', code: 1 });
       return res.end();
     }
 
-    const places = (searchData.results || []).slice(0, maxInt);
+    const places = (searchData.places || []).slice(0, maxInt);
     send({ type: 'log', line: `Encontrados: ${places.length} resultados` });
 
     let saved = 0, dups = 0;
 
     for (let i = 0; i < places.length; i++) {
       const p = places[i];
-
-      // Obtener teléfono y website con una llamada de detalle
-      let phone = '', website = '';
-      try {
-        const details = await placesDetails(p.place_id, apiKey);
-        phone   = details.formatted_phone_number || '';
-        website = details.website || '';
-      } catch (_) { /* detalles no críticos */ }
+      // Nueva API: campos con nombres distintos a la legacy
+      const nombre  = p.displayName?.text || '';
+      const phone   = p.nationalPhoneNumber || '';
+      const website = p.websiteUri || '';
+      const stars   = p.rating ? `⭐ ${p.rating}` : '';
 
       const ok = await saveLeadJS({
-        nombre: p.name, rubro, ciudad,
-        direccion: p.formatted_address || '',
+        nombre, rubro, ciudad,
+        direccion: p.formattedAddress || '',
         telefono: phone, website,
         rating: p.rating ?? null,
-        total_reviews: p.user_ratings_total || 0,
+        total_reviews: p.userRatingCount || 0,
         cliente, producto,
       });
 
       ok ? saved++ : dups++;
-      const tag   = ok ? 'GUARDADO' : 'DUPLICADO';
-      const stars = p.rating ? `⭐ ${p.rating}` : '';
-      send({ type: 'log', line: `[${i + 1}] ${tag}: ${p.name} | ${phone} | ${stars}` });
+      send({ type: 'log', line: `[${i + 1}] ${ok ? 'GUARDADO' : 'DUPLICADO'}: ${nombre} | ${phone} | ${stars}` });
     }
 
     send({ type: 'log', line: `\n→ ${saved} guardados, ${dups} duplicados` });
