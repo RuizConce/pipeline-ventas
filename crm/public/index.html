@@ -156,6 +156,49 @@
   </div>
 </div>
 
+<!-- ── Scraper Instagram ────────────────────────────────────────────────── -->
+<div class="collapsible-panel">
+  <button class="panel-toggle" id="igToggleBtn" onclick="toggleIG()">
+    <span id="igArrow">▶</span> 📸 Scraper Instagram
+  </button>
+  <div class="scraper-body" id="igBody">
+    <div class="form-group" style="min-width:260px">
+      <label>Hashtags (separados por coma, sin #)</label>
+      <input type="text" id="igHashtags" placeholder="iquiquerestaurante, negocioiqq, temucofood">
+    </div>
+    <div class="form-group" style="min-width:120px">
+      <label>Ciudad (para los leads)</label>
+      <input type="text" id="igCiudad" value="Iquique">
+    </div>
+    <div class="form-group" style="min-width:72px">
+      <label>Máx / hashtag</label>
+      <input type="number" id="igMax" value="20" min="1" max="60">
+    </div>
+    <div class="form-group">
+      <label>Producto</label>
+      <input type="text" id="igProducto" value="WEB">
+    </div>
+    <div class="form-group" style="min-width:170px">
+      <label>Para qué cliente</label>
+      <select id="igCliente" onchange="onClienteChange('ig')">
+        <option value="Conecta CSur">Conecta CSur</option>
+        <option value="__nuevo__">+ Nuevo cliente...</option>
+      </select>
+      <input type="text" id="igClienteNuevo" placeholder="Nombre del cliente"
+        style="display:none;margin-top:5px;width:100%;padding:7px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:0.875rem">
+    </div>
+    <div class="form-group" style="min-width:auto">
+      <label>&nbsp;</label>
+      <button class="btn btn-primary" id="btnRunIG" onclick="runIG()">▶ Ejecutar</button>
+    </div>
+    <div style="width:100%;margin-top:6px;font-size:0.75rem;color:#64748b;background:#fefce8;border:1px solid #fde68a;border-radius:6px;padding:7px 12px">
+      ⚠ Requiere Playwright/Chromium instalado en el servidor. Puede tardar varios minutos y consume ~500 MB RAM.
+      Asegúrate de tener <code>IG_USERNAME</code> e <code>IG_PASSWORD</code> en las Variables de Railway para autenticarse.
+    </div>
+    <div class="terminal" id="igTerminal"></div>
+  </div>
+</div>
+
 <!-- ── Campaña masiva ───────────────────────────────────────────────────── -->
 <div class="collapsible-panel">
   <button class="panel-toggle" id="campaignToggleBtn" onclick="toggleCampaign()">
@@ -484,8 +527,8 @@ async function loadClientes() {
     if (cur) el.value = cur;
   }
 
-  // Selects con "Nuevo cliente..." (scraper, new lead)
-  for (const id of ['sCliente', 'nlCliente']) {
+  // Selects con "Nuevo cliente..." (scraper, instagram, new lead)
+  for (const id of ['sCliente', 'igCliente', 'nlCliente']) {
     const el = document.getElementById(id);
     if (!el) continue;
     const cur = el.value;
@@ -914,6 +957,90 @@ async function exportWhatsApp() {
   a.download = 'leads-whatsapp.csv';
   a.click();
   URL.revokeObjectURL(url);
+}
+
+// ── Scraper Instagram ─────────────────────────────────────────────────────────
+function toggleIG() {
+  const body  = document.getElementById('igBody');
+  const arrow = document.getElementById('igArrow');
+  const btn   = document.getElementById('igToggleBtn');
+  const open  = body.classList.toggle('open');
+  arrow.textContent = open ? '▼' : '▶';
+  btn.classList.toggle('open', open);
+}
+
+async function runIG() {
+  const hashtags = document.getElementById('igHashtags').value.trim();
+  const ciudad   = document.getElementById('igCiudad').value.trim();
+  const max      = document.getElementById('igMax').value;
+  const producto = document.getElementById('igProducto').value.trim();
+  const cliente  = getClienteValue('ig');
+
+  if (!hashtags) { alert('Ingresa al menos un hashtag'); return; }
+
+  const term = document.getElementById('igTerminal');
+  term.innerHTML = '';
+  term.classList.add('active');
+
+  const btn = document.getElementById('btnRunIG');
+  btn.disabled = true;
+  btn.textContent = '⏳ Corriendo...';
+
+  const startDiv = document.createElement('div');
+  startDiv.className = 'log-start';
+  startDiv.textContent = `▶ Instagram: ${hashtags.split(',').map(h => '#' + h.trim().replace(/^#/,'')).join(', ')} (max ${max}/hashtag)`;
+  term.appendChild(startDiv);
+
+  try {
+    const resp = await fetch('/api/scraper/instagram', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hashtags, ciudad, max: parseInt(max), producto, cliente }),
+    });
+
+    if (!resp.ok) { const err = await resp.json(); scraperLine(term, `ERROR: ${err.error}`); return; }
+
+    const reader  = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const parts = buf.split('\n\n');
+      buf = parts.pop();
+      for (const part of parts) {
+        const line = part.replace(/^data: /, '').trim();
+        if (!line) continue;
+        try {
+          const msg = JSON.parse(line);
+          if (msg.type === 'log') scraperLine(term, msg.line);
+          else if (msg.type === 'err') {
+            const d = document.createElement('div');
+            d.className = 'log-err';
+            d.textContent = '⚠ ' + msg.line;
+            term.appendChild(d);
+            term.scrollTop = term.scrollHeight;
+          } else if (msg.type === 'done') {
+            const d = document.createElement('div');
+            d.className = 'log-done';
+            d.textContent = msg.code === 0 ? '✓ Scraping completado' : '✗ Proceso terminó con error';
+            term.appendChild(d);
+            term.scrollTop = term.scrollHeight;
+            loadLeads();
+            loadStats();
+            loadClientes();
+          }
+        } catch (_) { scraperLine(term, line); }
+      }
+    }
+  } catch (e) {
+    scraperLine(term, `Error de conexión: ${e.message}`);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '▶ Ejecutar';
+  }
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────

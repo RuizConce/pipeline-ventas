@@ -467,7 +467,8 @@ async def scrape_instagram(hashtags: list[str], ciudad: str, cliente: str,
 async def main():
     import argparse
     parser = argparse.ArgumentParser(description="Scraper Instagram para pipeline de ventas")
-    parser.add_argument("--hashtag", type=str, help="Hashtag específico a scrapear (sin #)")
+    parser.add_argument("--hashtag",  type=str, help="Hashtag específico a scrapear (sin #)")
+    parser.add_argument("--hashtags", type=str, help="Hashtags separados por coma (sin #)")
     parser.add_argument("--ciudad", type=str, default="Iquique",
                         help="Ciudad (usa hashtags predefinidos). Opciones: Iquique, Temuco")
     parser.add_argument("--cliente", type=str, default="Conecta CSur",
@@ -478,7 +479,9 @@ async def main():
                         help="Máximo de perfiles por hashtag")
     args = parser.parse_args()
 
-    if args.hashtag:
+    if args.hashtags:
+        hashtags = [h.strip().lstrip("#") for h in args.hashtags.split(",") if h.strip()]
+    elif args.hashtag:
         hashtags = [args.hashtag.lstrip("#")]
     else:
         hashtags = HASHTAGS_POR_CIUDAD.get(args.ciudad, HASHTAGS_POR_CIUDAD["Iquique"])

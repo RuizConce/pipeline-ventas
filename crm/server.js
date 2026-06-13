@@ -2,6 +2,7 @@ const express = require('express');
 const mysql = require('mysql2/promise');
 const cors = require('cors');
 const path = require('path');
+const { spawn } = require('child_process');
 require('dotenv').config();
 
 const app = express();
@@ -428,8 +429,70 @@ app.post('/api/scraper/run', async (req, res) => {
   }
 });
 
+// POST /api/scraper/instagram — Playwright Instagram scraper, SSE en tiempo real
+app.post('/api/scraper/instagram', (req, res) => {
+  const {
+    hashtags = '', ciudad = 'Iquique', max = 20,
+    producto = '', cliente = 'Conecta CSur',
+  } = req.body;
+
+  const hashtagList = hashtags.split(',').map(h => h.trim().replace(/^#/, '')).filter(Boolean);
+  if (!hashtagList.length) return res.status(400).json({ error: 'Al menos un hashtag es requerido' });
+
+  const safeHtag = /^[a-zA-Z0-9_\.áéíóúÁÉÍÓÚñÑ]+$/;
+  if (!hashtagList.every(h => safeHtag.test(h))) {
+    return res.status(400).json({ error: 'Hashtags solo pueden contener letras, números y guiones bajos' });
+  }
+
+  const maxInt = Math.min(Math.max(parseInt(max) || 20, 1), 60);
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders();
+
+  const send = (data) => res.write(`data: ${JSON.stringify(data)}\n\n`);
+  send({ type: 'start', hashtags: hashtagList, max: maxInt });
+  send({ type: 'log', line: `Iniciando scraper Instagram: ${hashtagList.map(h => '#' + h).join(', ')} (max ${maxInt} por hashtag, ciudad: ${ciudad})` });
+  send({ type: 'log', line: '⚠ Playwright/Chromium: puede tardar varios minutos y usar +500 MB RAM.' });
+
+  const scriptPath = path.join(__dirname, '..', 'scraper', 'instagram.py');
+  const projectRoot = path.join(__dirname, '..');
+
+  const proc = spawn('python3', [
+    '-u', scriptPath,
+    '--hashtags', hashtagList.join(','),
+    '--ciudad',   ciudad,
+    '--max',      String(maxInt),
+    '--producto', producto,
+    '--cliente',  cliente,
+  ], { cwd: projectRoot, timeout: 360000 });
+
+  const streamLines = (chunk, type) => {
+    chunk.toString().split('\n').forEach(line => {
+      if (line.trim()) send({ type, line: line.trimEnd() });
+    });
+  };
+
+  proc.stdout.on('data', chunk => streamLines(chunk, 'log'));
+  proc.stderr.on('data', chunk => streamLines(chunk, 'err'));
+
+  proc.on('close', code => {
+    send({ type: 'done', code: code ?? 1 });
+    res.end();
+  });
+
+  proc.on('error', err => {
+    send({ type: 'err', line: `No se pudo iniciar Python: ${err.message}` });
+    send({ type: 'done', code: 1 });
+    res.end();
+  });
+
+  res.on('close', () => { if (!proc.killed) proc.kill('SIGTERM'); });
+});
+
 app.get('/api/scraper/scripts', (_req, res) => {
-  res.json({ scripts: ['google_maps'] });
+  res.json({ scripts: ['google_maps', 'instagram'] });
 });
 
 // Health check
