@@ -2,7 +2,7 @@ const express = require('express');
 const mysql = require('mysql2/promise');
 const cors = require('cors');
 const path = require('path');
-const { spawn } = require('child_process');
+const { spawn, execSync } = require('child_process');
 require('dotenv').config();
 
 const app = express();
@@ -153,78 +153,15 @@ app.delete('/api/leads/:id', async (req, res) => {
   }
 });
 
-// POST /api/scraper/run — ejecuta google_maps.py como proceso hijo, streama output via SSE
+// POST /api/scraper/run — diagnóstico: confirmar Python disponible
 app.post('/api/scraper/run', (req, res) => {
-  const { rubro, ciudad, max = 15, producto = '', cliente = 'Conecta CSur' } = req.body;
-
-  if (!rubro || !ciudad) {
-    return res.status(400).json({ error: 'rubro y ciudad son requeridos' });
+  res.setHeader('Content-Type', 'text/plain');
+  try {
+    const out = execSync('which python3 || echo NO_PYTHON', { timeout: 10000 });
+    res.send(out.toString());
+  } catch (e) {
+    res.send('ERROR: ' + e.message);
   }
-
-  // Validar que los inputs no contengan caracteres peligrosos (prevenir inyección)
-  const safePattern = /^[a-zA-ZáéíóúÁÉÍÓÚñÑüÜ\s\-\.]+$/;
-  if (!safePattern.test(rubro) || !safePattern.test(ciudad)) {
-    return res.status(400).json({ error: 'rubro y ciudad solo pueden contener letras, espacios y guiones' });
-  }
-  const maxInt = Math.min(Math.max(parseInt(max) || 15, 1), 100);
-
-  // Cabeceras SSE para streaming en tiempo real
-  res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache');
-  res.setHeader('Connection', 'keep-alive');
-  res.flushHeaders();
-
-  const send = (data) => res.write(`data: ${JSON.stringify(data)}\n\n`);
-
-  send({ type: 'start', rubro, ciudad, max: maxInt, producto, cliente });
-
-  // DIAGNÓSTICO TEMPORAL — reemplazar por scraper real una vez confirmado Python
-  const child = spawn('/bin/sh', ['-c', 'which python3 || which python || ls /usr/bin/python* 2>&1 || echo "NO PYTHON"'], {
-    cwd: path.join(__dirname, '..'),
-    env: { ...process.env },
-  });
-
-  // Matar el proceso si tarda más de 2 minutos
-  const timer = setTimeout(() => {
-    if (!child.killed) {
-      child.kill('SIGTERM');
-      send({ type: 'err', line: '[TIMEOUT] El proceso tardó más de 120 s y fue terminado.' });
-      send({ type: 'done', code: 1 });
-      res.end();
-    }
-  }, 120000);
-
-  child.stdout.on('data', (chunk) => {
-    chunk.toString().split('\n').filter(Boolean).forEach(line => {
-      send({ type: 'log', line });
-    });
-  });
-
-  child.stderr.on('data', (chunk) => {
-    // Python escribe tracebacks y warnings en stderr — los marcamos [stderr]
-    chunk.toString().split('\n').filter(Boolean).forEach(line => {
-      send({ type: 'err', line: `[stderr] ${line}` });
-    });
-  });
-
-  child.on('close', (code) => {
-    clearTimeout(timer);
-    send({ type: 'done', code });
-    res.end();
-  });
-
-  child.on('error', (err) => {
-    clearTimeout(timer);
-    send({ type: 'err', line: `[spawn] Error al iniciar proceso: ${err.message}` });
-    send({ type: 'done', code: 1 });
-    res.end();
-  });
-
-  // Si el cliente se desconecta, limpiar
-  req.on('close', () => {
-    clearTimeout(timer);
-    if (!child.killed) child.kill('SIGTERM');
-  });
 });
 
 // GET /api/scraper/scripts — lista de scrapers disponibles
